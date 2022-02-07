@@ -1,0 +1,12 @@
+USELIB("E:\Develop\CBuilder5\Lib\memmgr.lib");
+USEUNIT("FieldTypes.cpp");
+USEUNIT("base.cpp");
+USEDEF("def.def");
+USEUNIT("Parser.cpp");
+USEUNIT("Calculator.cpp");
+USEUNIT("StringField.cpp");
+USELIB("E:\Develop\CBuilder5\Lib\Release\vcldb50.lib");
+//---------------------------------------------------------------------------
+This file is used by the project manager only and should be treated like the project file
+
+DllEntryPoint

@@ -1,0 +1,7 @@
+LIBRARY dll.dll INITGLOBAL
+EXPORTS
+        createParser = @createParser$qqspp5SPoleip7SFieldsit3i
+        destroyParser = @destroyParser$qqsp7CParser
+        getSize = @getSize$qqsp7CParserp11Db@TDataSeti
+        getString = @getString$qqsp7CParserpp5UScanuip11Db@TDataSetp17System@AnsiStringt5t5i
+        writeBuffer = @writeBuffer$qqsp7CParserpp5UScanp11Db@TDataSeti

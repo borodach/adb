@@ -1,0 +1,9 @@
+LIBRARY     FIELDTYPES.DLL
+
+EXPORTS
+    ___CPPdebugHook                @1   ; ___CPPdebugHook
+    createParser                   @2   ; createParser
+    destroyParser                  @3   ; destroyParser
+    getSize                        @4   ; getSize
+    getString                      @5   ; getString
+    writeBuffer                    @6   ; writeBuffer

@@ -1,0 +1,9 @@
+LIBRARY     FIELDTYPES.DLL
+
+EXPORTS
+    @createParser$qqsp5SPoleip7SFieldsit3i @1   ; __stdcall createParser(SPole *, int, SFields *, int, SFields *, int)
+    @getSize$qqsp7CParserp15Dbtables@TQueryi @2   ; __stdcall getSize(CParser *, Dbtables::TQuery *, int)
+    ___CPPdebugHook                @3   ; ___CPPdebugHook
+    destroyParser                  @4   ; destroyParser
+    getString                      @5   ; getString
+    writeBuffer                    @6   ; writeBuffer

@@ -1,0 +1,462 @@
+unit Main;
+interface
+Uses sharemem,
+Classes,
+Dictonary,
+MainForm,
+ComCtrls,
+Messages,
+Windows,
+SysUtils,
+dyn_array,
+dbtables,
+Db,
+Forms,
+doswin,
+MyStream;
+type
+TProject = class
+    procedure Add_Dict;
+    procedure Del_Dict (t: TTreeNode);
+    procedure Reset_Project; //очистка
+    procedure Create_New; //заполнение свойств проекта
+    procedure Show_Info; //вывод информации о пролекте
+    procedure Load;
+    procedure Save;
+    procedure OnGetTextEvent (Sender: TField;var Text: string; DisplayText: boolean);
+    procedure Init;
+    procedure Set_Saved (i: integer);stdcall;
+    destructor Destroy;override;
+public
+    function GetUniqueDictName (templ: String): String;
+    function IsDictNameUnique (templ: String): Boolean;
+    function getDictCount (): Integer;
+public
+    file_name: PChar; //файл с описанием проекта
+    cur_dir: PChar;
+    Saved: Integer; //1 если не нужно сохранять
+    Save_As: Integer;// 1 если выполняется Save as...
+    
+    DW: bool;
+    Comment: TStringList; //примечание
+    //Dict_Count: Integer; //число словарей
+    //Head,last: PDList;
+    ////////////////////////////
+    Query: TQuery;
+end;
+var Pr: TProject;
+implementation
+uses ProjectInfoForm,
+ProjectCreationForm;
+
+function TProject.getDictCount (): Integer;
+var tn: TTreeNode;
+begin
+    
+    tn := Form1.Tree1.TopItem;
+    Result := tn.Count;
+    
+end;
+
+procedure TProject.Set_Saved (i: integer);
+begin
+    Saved := i;
+    if i = 0 then
+    Form1.Tree1.TopItem.Text := '*Проект создан. (файл ' + file_name + '.)'
+    else
+    Form1.Tree1.TopItem.Text := 'Проект создан. (файл ' + file_name + '.)';
+end;
+procedure TProject.OnGetTextEvent (Sender: TField;var Text: string; DisplayText: boolean);
+begin
+    Text := DosToWinStr (Pchar (Sender.AsString), 65535);
+end;
+destructor TProject.Destroy;
+begin
+    Reset_Project;
+    myStrDispose (file_name);
+    myStrDispose (cur_dir);
+    Comment.Destroy;
+    Query.Destroy;
+    inherited Destroy;
+end;
+procedure TProject.Init;
+begin
+    Saved := 1;
+    Save_As := 0;
+    DW := false;
+    cur_dir := nil;
+    file_name := nil;
+    Comment := TStringList.Create;
+    Query := TQuery.Create (Application);
+    file_name := nil;
+end;
+
+procedure TProject.Add_Dict;
+var t: Dict;
+tn: TTreeNode;
+begin
+    t := nil;
+    try
+        t := Dict.Create;
+        except
+        t.Free;
+        MessageBox (Form1.Handle, 'Не могу добавить словарь. Мало памяти.', 'Ошибка', 0);
+        Exit;
+    end;
+    if not t.Set_Param then
+    begin
+        t.Destroy;
+        Exit;
+    end;
+    if not t.Start_Create then
+    begin
+        t.Destroy;
+        Exit;
+    end;
+    t.Is_Saved := 0;
+    with Form1.Tree1.Items do
+    begin
+        tn := AddChild (Form1.Tree1.TopItem, t.Rem + ' ( Создан ' + DateTimeToStr (t.dt) + ' ,файл: ' + t.file_name + ' ).');
+        if tn = nil then
+        begin
+            MessageBox (Form1.Handle, 'Не могу добавить словарь. Мало памяти.', 'Ошибка', 0);
+            t.Kill_Dictonary;
+            t.Destroy;
+            Exit;
+        end;
+        tn.Data := t;
+    end;
+    Set_Saved (0);
+end;
+
+procedure TProject.Del_Dict (t: TTreeNode);
+begin
+    Dict (t.Data).Kill_Dictonary;
+    Dict (t.Data).Destroy;
+    t.Delete;
+    Set_Saved (0);
+end;
+
+procedure TProject.Save;
+var r, cn, i, cod: Integer;
+f: TStream;
+tt: TTreeNode;
+pos: Longint;
+nnm: String;
+
+begin
+    if (Save_As = 0) and (Saved = 1) then Exit;
+    cod := $2012db;
+    nnm := String (pr.Cur_Dir) + String (file_name);
+    f := nil;
+    
+    try
+        f := TMyStream.Create (nnm, fmCreate);
+        f.Write (cod, sizeof (integer));
+        f.Write (dw, sizeof (dw));
+        
+        with Comment do
+        begin
+            i := Count;
+            f.Write (i, sizeof (i));
+            for i := 0 to Count - 1 do
+            if not MySaveStr (f, PChar (Strings [i]))
+            then raise EInOutError.Create ('Ошибка записи файла проекта.');
+        end;
+        
+        with Query.SQL do
+        begin
+            i := Count;
+            f.Write (i, sizeof (i));
+            for i := 0 to Count - 1 do
+            if not MySaveStr (f, PChar (Strings [i]))
+            then raise EInOutError.Create ('Ошибка записи файла проекта.');
+        end;
+        
+        if not MySaveStr (f, PChar (Query.DataBaseName))
+        then raise EInOutError.Create ('Ошибка записи файла проекта');
+        tt := Form1.Tree1.TopItem;
+        cn := tt.Count;
+        r := cn;
+        pos := f.Position;
+        f.Write (cn, sizeof (cn));
+        
+        for i := 0 to cn - 1 do
+        begin
+            if not Dict (tt.item [i].Data).Save then
+            begin
+                MessageBox (Form1.handle,
+                PChar ('Ошибка записи файла проекта (' +
+                Dict (tt.item [i].Data).file_name +
+                '). Several files may be corrupted.'),
+                'Error.',
+                0);
+                
+                Dec (r);
+            end
+            else
+            if (not MySaveStr (f, Dict (tt.item [i].Data).file_name))
+            then raise EInOutError.Create ('Ошибка записи файла проекта.');
+        end;
+        if r <> cn then
+        begin
+            f.Seek (pos, soFromBeginning);
+            f.Write (r, sizeof (r));
+        end;
+        f.Free;
+        Set_Saved (1);
+        except
+        on e: EInOutError do
+        begin
+            try
+                f.Free
+                except
+            end;
+            DeleteFile (nnm);
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка записи.'), 0);
+            exit;
+        end;
+    end;
+end;
+
+procedure TProject.Load;
+var
+r, cn, i, cod: Integer;
+f: TMyStream;
+buf: PChar;
+//   tn: TTreeNode;
+d: Dict;
+pc: PChar;
+nm, nnm: String;
+res: Boolean;
+begin
+    Set_Saved (1);
+
+    d := nil;
+    nnm := String (pr.Cur_Dir) + String (file_name);
+    pc := file_name;
+    file_name := nil;
+    Reset_Project;
+    file_name := pc;
+    buf := nil;
+    f := nil;
+    try
+        f := TMyStream.Create (nnm, fmOpenRead);
+        cod := 0;
+        f.read (cod, sizeof (integer));
+        if cod <> $2012db then raise EInOutError.Create ('Неподдерживаемый формат файла проекта' + file_name + '.');
+        f.read (dw, sizeof (dw));
+        with Comment do
+        begin
+            f.Read (cn, sizeof (cn));
+            for i := 0 to cn - 1 do
+            begin
+                if (not MyLoadStr (f, @buf))
+                then raise EInOutError.Create ('Ошибка чтения файла проекта.');
+                if Add (buf) < 0 then raise EOutOfMemory.Create ('Мало памяти.');
+                myStrDispose (buf);
+            end
+        end;
+        with Query.SQL do
+        begin
+            f.Read (cn, sizeof (cn));
+            for i := 0 to cn - 1 do
+            begin
+                if (not MyLoadStr (f, @buf))
+                then raise EInOutError.Create ('Ошибка чтения файла проекта.');
+                if Add (buf) < 0 then raise EOutOfMemory.Create ('Мало памяти.');
+                myStrDispose (buf);
+            end
+        end;
+
+
+        if (not MyLoadStr (f, @buf))
+        then raise EInOutError.Create ('Ошибка загрузки проекта.');
+        Query.DatabaseName := buf;
+        myStrDispose (buf);
+        f.Read (cn, sizeof (cn));
+        for r := 1 to cn do
+        begin
+            try
+                d := Dict.Create;
+                except
+                d.Free;
+                raise;
+            end;
+            if (not MyLoadStr (f, @d.file_name)) then
+            begin
+                d.Free;
+                raise EInOutError.Create ('Ошибка чтения.');
+            end;
+            res := d.Load;
+            nm := d.file_name;
+            if not res then
+            begin
+                d.Free;
+                MessageBox (Form1.handle, PChar ('Ошибка чтения словаря ' + nm + '.'), 'Ошибка.', 0);
+                Set_Saved (0);
+            end;
+            { else
+                        	begin
+
+                        	end;}
+        end;
+        f.Free;
+        f := nil;
+        Query.Open;
+        if DW then
+        for i := 0 to Query.FieldCount - 1 do
+        Query.Fields [i].OnGetText := OnGetTextEvent
+        else
+        for i := 0 to Query.FieldCount - 1 do
+        Query.Fields [i].OnGetText := Nil;
+        Form1.Tree1.FullExpand;
+        Form1.Tree1.Selected := Form1.Tree1.TopItem;
+
+        except
+        on e: EInOutError do
+        begin
+            try
+                f.Free;
+                except
+            end;
+            myStrDispose (buf);
+            Reset_Project;
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка чтения.'), 0);
+            exit;
+        end;
+        on e: Exception do
+        begin
+            try
+                f.Free;
+                except
+            end;
+            Reset_Project;
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка открытия базы данных.'), 0);
+            //exit;
+        end;
+    end;
+end;
+
+procedure TProject.Show_Info;
+begin
+    try
+        InfoForm := TInfoForm.Create (Application);
+        if InfoForm.ShowModal = 2 then Set_Saved (0);
+        except
+        InfoForm.Free;
+        MessageBox (Form1.Handle, 'Мало памяти.', 'Ошибка.', 0);
+        Exit;
+    end;
+    
+end;
+
+procedure TProject.Create_New;
+begin
+    oProjectCreationForm := nil;
+    try
+        Reset_Project;
+        myStrDispose (file_name);
+        myStrDispose (cur_dir);
+        
+        oProjectCreationForm :=
+        TProjectCreationForm.Create (Application);
+        
+        if oProjectCreationForm.ShowModal = - 1 then exit;
+        
+        Set_Saved (0);
+        except
+        oProjectCreationForm.Free;
+        MessageBox (Form1.Handle, 'Мало памяти.', 'Ошибка.', 0);
+        Exit;
+    end;
+    
+end;
+
+
+procedure TProject.Reset_Project ();
+var i: integer;
+t: TTreeNode;
+begin
+    Saved := 1;
+    Save_As := 0;
+    DW := false;
+    //myStrDispose(file_name);
+    //myStrDispose(cur_dir);
+    Query.Close;
+    Query.SQL.Clear;
+    Query.DatabaseName := '';
+    Comment.Clear;
+    t := Form1.Tree1.TopItem;
+    for i := 0 to t.Count - 1 do
+    begin
+        Dict (t.item [i].data).Destroy_Dictonary;
+        Dict (t.item [i].data).Destroy;
+    end;
+    t.DeleteChildren;
+    t.Text := 'Проект не создан.';
+end;
+function TProject.GetUniqueDictName (templ: String): String;
+var i, cn: Integer;
+res, base, ext, pt: String;
+begin
+    i := 1;
+    pt := '';
+    ext := '';
+    base := templ;
+    cn := Pos ('.', base);
+    if (cn <> 0) then
+    begin
+        pt := '.';
+        base := Copy (templ, 1, cn - 1);
+        ext := Copy (templ, cn + 1, Length (templ) - cn);
+    end;
+    
+    while (i > 0) do
+    begin
+        
+        res := base + IntToStr (i) + pt + ext;
+        if (IsDictNameUnique (res)) then break;
+        Inc (i);
+    end;
+    Result := res;
+end;
+
+function TProject.IsDictNameUnique (templ: String): Boolean;
+var i, cn: Integer;
+tt: TTreeNode;
+pstr: PChar;
+begin
+    Result := false;
+    if pr.file_name <> nil then
+    if ((StrIComp (pr.file_name, PChar (templ)) = 0)) then Exit;
+    if (Length (templ) = 0) then exit;
+    
+    tt := Form1.Tree1.TopItem;
+    cn := tt.Count;
+    Result := true;
+    for i := 0 to cn - 1 do
+    begin
+        pstr := Dict (tt.item [i].Data).file_name;
+        if (pstr = nil) then continue;
+        if ((StrIComp (pstr, PChar (templ)) = 0) or
+        (not Dict (tt.item [i].Data).IsNetNameUnique (templ))) then
+        begin
+            Result := false;
+            Exit;
+        end;
+    end;
+end;
+
+
+
+initialization
+Pr := TProject.Create;
+pr.Init;
+Pr.Cur_Dir := mystrNew ('');
+end.
+
+
+
+
+

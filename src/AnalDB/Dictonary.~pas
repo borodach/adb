@@ -1,0 +1,891 @@
+unit Dictonary;
+// класс Dictonary - базовый словарь таблицы
+interface
+Uses sharemem, Windows, Messages, SysUtils, Classes, Controls, Forms, Dialogs, MyStream,
+ComCtrls,
+dyn_array,
+DictonaryCreationProgressa,
+MainForm,
+DB, DosWin,
+T_Net,
+DictonaryParamsForm;
+
+type
+pint = ^integer;
+pcurr = ^currency;
+pdouble = ^double;
+Dict = class
+    dt: TDateTime; // время создания словаря
+    Count, sz: Integer; //число полей в словаре и число строк в таблице на момент создания словаря
+    Rem: PChar; // примечание
+    file_name: PChar; // имя файла со словарем
+    _fields: ^Pole; // массив указателей на словари столбцов
+    Nets: ^TNet; //Массив связанных со словарем сетей
+    Nets_Count: Integer;
+    is_saved: Integer;
+    /////////////////////////////////////////////////////////////////////
+    function Set_Param: Boolean;
+    procedure Init;
+    procedure Show_Dictonary;
+    function Start_Create: Boolean;
+    function Create_Dictonary: Integer;
+    procedure Destroy_Dictonary;
+    procedure Kill_Dictonary;
+    function Save: Boolean;
+    function Load: Boolean;
+    function GetField (i: Integer): Pole;stdcall;
+    //function SetRem(nm:PChar):Boolean;
+    //function SetFileName(f_nm:PChar):Boolean;
+    procedure AddLibrary;
+    procedure KillLibrary (i: Integer);
+    function GetLib (i: Integer): TNet;
+    //  function GetUniqueNetName(templ:String):String;
+    function IsNetNameUnique (templ: String): Boolean;
+    
+    procedure showInfo (var f: Text);
+    
+end;
+function myStrNew (st: PChar): PChar;
+procedure myStrDispose (var st: PChar);
+//var _dict:dict;
+implementation
+
+Uses
+DictonaryInfoForm,
+main;
+
+function Dict.Start_Create: Boolean;
+var i: Cardinal;
+j: Cardinal;
+begin
+    try
+        Progr := TProgr.Create (Application);
+        Progr.Init;
+        //i := BeginThread (nil, 0, addr (Dict.Create_Dictonary), self, 0, j);
+        Progr.Show;//Modal;
+        Application.ProcessMessages;
+        j := Create_Dictonary;
+    except
+        Progr.Free;
+        MessageBox (Form1.Handle, 'Мало памяти.', 'Ошибка.', 0);
+        Result := False;
+        Exit;
+    end;
+
+
+    //  repeat
+    //  GetExitCodeThread(i,j);
+    //  until(j<>Still_Active);
+
+    //WaitForSingleObject (i, INFINITE);
+    //GetExitCodeThread (i, j);
+    //CloseHandle (i);
+
+    //0-ok
+    Progr.Destroy;
+    Result := j = 0;
+end;
+
+function myStrNew (st: PChar): PChar;
+var t: PChar;
+begin
+    result := nil;
+    GetMem (t, strlen (st) + 1);
+    StrCopy (t, st);
+    result := t;
+end;
+procedure myStrDispose (var st: PChar);
+begin
+    if st <> nil then FreeMem (st, strlen (st) + 1);
+    st := nil;
+end;
+procedure Dict.Init;
+begin
+    _fields := nil;
+    Nets := nil;
+    Rem := nil;
+    Count := 0;
+    Nets_Count := 0;
+end;
+
+function Dict.Create_Dictonary: Integer;
+var ct, i, j, k, dc, bb0, bb1, v1, counter: Integer;
+pi, pi1: pint;
+pd, pd1: pdouble;
+pc, pc1: pcurr;
+t, t0, tt: ^Pole;
+st: PChar;
+res: Boolean;
+br: double;
+bc: currency;
+begin
+    try
+        Application.ProcessMessages;
+        counter := 0;
+        bb0 := 0;
+        result := 0;
+        dc := 0;
+        dt := Now;
+        Application.ProcessMessages;
+        with pr.Query do
+        begin
+            sz := RecordCount;
+            Count := FieldCount;
+            try
+                Application.ProcessMessages;
+                GetMem (_fields, sizeof (Pole) * Count);
+                except
+                Progr.Hide_Progress;
+                sz := 0;
+                Count := 0;
+                MessageBox (Form1.Handle, 'Мало памяти.', 'Ошибка', 0);
+                Exit;
+            end;
+
+            Application.ProcessMessages;
+            FillChar (_fields^, sizeof (Pole) * Count, #0);
+            t := _fields;
+            res := true;
+            Application.ProcessMessages;
+            try
+                ct := Count - 1;
+                for i := 0 to ct do
+                begin
+
+                    Application.ProcessMessages;
+
+                    case (Fields [i].DataType) of
+                        ftSmallInt, ftInteger, ftWord:
+                        begin
+                            Inc (counter);
+                            Dec (dc);
+                            t^ := Pole.Create;
+                            t.voc := d_array.Create;
+                            t.F_Type := 0;
+                            res := t.voc.Init (4096, 4096, sizeof (integer), False, integer_cmp);
+                        end;
+                        ftFloat, ftDateTime, ftTime, ftDate:
+                        begin
+                            Inc (counter);
+                            Dec (dc);
+                            t^ := Pole.Create;
+                            t.voc := d_array.Create;
+                            t.F_Type := 1;
+                            res := t.voc.Init (4096, 4096, sizeof (double), False, double_cmp);
+                        end;
+                        ftCurrency:
+                        begin
+                            Dec (dc);
+                            Inc (counter);
+                            t^ := Pole.Create;
+                            t^.voc := d_array.Create;
+                            t.F_Type := 2;
+                            res := t.voc.Init (4096, 4096, sizeof (currency), False, currency_cmp);
+                        end;
+                        ftString, ftBoolean:
+                        begin
+                            Inc (counter);
+                            t^ := Pole.Create;
+                            t^.voc := d_array.Create;
+                            t.tr_num := 0;
+                            t.F_Type := 3;
+                            res := t.voc.Init (4096, 4096, sizeof (PChar), True, string_cmp);
+                        end
+                        else
+                        Inc (dc);
+                    end;
+                    Application.ProcessMessages;
+                    if t^ <> nil then
+                    begin
+                        if not res then raise EOutOfMemory.Create ('Не могу инициализировать словарь. Мало памяти');
+                        t.num := i;
+                        t.name := myStrNew (PChar (Fields [i].FieldName));
+                    end;
+
+                    Application.ProcessMessages;
+                    if t^ <> nil then Inc (t);
+                end;
+
+                if dc <> 0 then
+                begin
+                    Dec (Count, dc);
+                    ReallocMem (_fields, Count * sizeof (Pole));
+                end;
+
+                Application.ProcessMessages;
+
+                t := _fields;
+                t0 := t;
+                Inc (t0, counter);
+                j := counter;
+                for i := 0 to ct do
+                begin
+
+                    Application.ProcessMessages;
+
+                    case (Fields [i].DataType) of
+                        ftSmallInt, ftInteger, ftWord:
+                        begin
+                            t0^ := Pole.Create;
+                            t0.voc := d_array.Create;
+                            t0.F_Type := 0;
+                            t0.num := - i - 1;
+                            t0.tr_num := - 1;
+                            t.tr_num := j;
+                            Inc (j);
+                            res := t0.voc.Init (4096, 4096, sizeof (integer), False, integer_cmp);
+                        end;
+                        ftFloat, ftDateTime, ftTime, ftDate:
+                        begin
+                            t0^ := Pole.Create;
+                            t0.voc := d_array.Create;
+                            t0.F_Type := 1;
+                            t0.tr_num := - 1;
+                            t0.num := - i - 1;
+                            t.tr_num := j;
+                            Inc (j);
+                            res := t0.voc.Init (4096, 4096, sizeof (double), False, double_cmp);
+                        end;
+                        ftCurrency:
+                        begin
+                            t0^ := Pole.Create;
+                            t0^.voc := d_array.Create;
+                            t0.num := - i - 1;
+                            t0.tr_num := - 1;
+                            t.tr_num := j;
+                            Inc (j);
+                            t0.F_Type := 2;
+                            res := t0.voc.Init (4096, 4096, sizeof (currency), False, currency_cmp);
+                        end;
+                        else
+                        begin
+                            inc (t);
+                            continue;
+                        end;
+                    end;
+
+                    Application.ProcessMessages;
+
+                    t0.name := myStrNew (PChar ('Тренд ' + Fields [i].FieldName));
+                    Inc (t0);
+
+                    Application.ProcessMessages;
+
+                    if not res then raise EOutOfMemory.Create ('Не могу инициализировать словарь. Мало памяти');
+                    //t.name:=myStrNew(PChar('Тренд '+Fields[i-1].FieldName));
+                    Inc (t);
+                end;
+
+
+                Application.ProcessMessages;
+
+                //инициализировали словарь
+                First;
+                for j := 1 to sz do
+                begin
+
+                    Application.ProcessMessages;
+
+                    t := _fields;
+                    for i := 1 to counter do
+                    begin
+
+                        Application.ProcessMessages;
+
+                        tt := _fields;
+                        inc (tt, t.tr_num);
+                        case (t.F_Type) of
+                            0:
+                            begin
+                                k := Fields [t.num].AsInteger;
+                                res := t.voc.Add (@k);
+                                if (res) and (j > 1) then
+                                begin
+                                    Prior;
+                                    Dec (k, Fields [t.num].AsInteger);
+                                    res := tt.voc.Add (@k);
+                                    Next;
+                                end
+                                else
+                                begin
+                                    res := tt.voc.Add (@k);
+                                end
+
+                            end;
+                            1:
+                            begin
+                                br := Fields [t.num].AsFloat;
+                                res := t.voc.Add (@br);
+                                if (res) and (j > 1) then
+                                begin
+                                    Prior;
+                                    br := br - Fields [t.num].AsFloat;
+                                    res := tt.voc.Add (@br);
+                                    Next;
+                                end
+                                else
+                                begin
+                                    res := tt.voc.Add (@br);
+                                end
+                            end;
+                            2:
+                            begin
+                                bc := Fields [t.num].AsCurrency;
+                                res := t.voc.Add (@bc);
+                                if (res) and (j > 1) then
+                                begin
+                                    Prior;
+                                    bc := bc - Fields [t.num].AsCurrency;
+                                    res := tt.voc.Add (@bc);
+                                    Next;
+                                end
+                                else
+                                begin
+                                    res := tt.voc.Add (@bc);
+                                end
+                            end;
+                            3: begin
+                                //if pr.DW then st:=myStrNew(PChar(DosToWinStr(PChar(Fields[i-1].AsString),65535)))
+                                //else
+                                st := myStrNew (PChar (Fields [t.num].AsString));
+                                res := t.voc.Add (@st);
+                            end;
+                        end;
+
+                        Application.ProcessMessages;
+
+                        if not res then raise EOutOfMemory.Create ('Не могу расширить словарь. Мало памяти');
+                        Inc (t);
+                    end;
+                    Next;
+                    bb1 := (100 * j) div sz;
+                    if (bb1 > bb0) then
+                    if Progr.StepTo (bb1) <> 0 then
+                    begin
+                        Result := 1;
+                        raise Exception.Create ('Первано пользователем');
+                    end;
+                    bb0 := bb1;
+
+                    Application.ProcessMessages;
+
+                end;
+
+                tt := _fields;
+                for i := 0 to Count - 1 do
+                begin
+                    Application.ProcessMessages;
+                    tt.voc.Minimize;
+                    Inc (tt);
+                end;
+
+                Application.ProcessMessages;
+
+                //	Progr.Hide_Progress;
+
+                except
+                on e: Exception do
+                begin
+                    Destroy_Dictonary;
+                    MessageBox (Form1.Handle, PChar (e.Message), 'Ошибка', 0);
+                    //  Progr.Hide_Progress;
+                end;
+
+            end;
+        end;
+
+    finally
+        Progr.Hide_Progress;
+    end;
+
+end;
+
+procedure Dict.Destroy_Dictonary;
+var i: Integer;
+t, t1: ^Pole;
+tt, tt1: ^TNet;
+begin
+    MyStrDispose (Rem);
+    MyStrDispose (file_name);
+    sz := 0;
+    t := _fields;
+    if t <> nil then
+    begin
+        for i := 1 to Count do
+        begin
+            if t^ <> nil then t^.Reset;
+            t1 := t;
+            Inc (t);
+            t1.Free;
+        end;
+        FreeMem (_fields, Count * sizeof (Pole));
+        _fields := nil;
+    end;
+    Count := 0;
+    if Nets <> nil then
+    begin
+        tt := Nets;
+        for i := 1 to Nets_Count do
+        begin
+            if tt <> nil then tt.DestroyNet;
+            tt1 := tt;
+            tt1.Destroy;
+            Inc (tt);
+        end;
+        FreeMem (Nets, Nets_Count * sizeof (TNet));
+        Nets := nil;
+    end;
+end;
+
+procedure Dict.Kill_Dictonary;
+type PNet = ^TNet;
+var f: TMyStream;
+dn: Boolean;
+res, i: Integer;
+t: PNet;
+nnm: string;
+begin
+    dn := true;
+    f := nil;
+    nnm := String (pr.Cur_Dir) + String (file_name);
+    try
+        f := TMyStream.Create (nnm, fmOpenRead);
+        f.Free;
+        f := nil;
+        except
+        f.Free;
+        f := nil;
+        dn := false;
+    end;
+    if (dn) then
+    begin
+        res := MessageBox (Form1.Handle, PChar ('Удалить файл словаря (' + String (file_name) + ')?'), 'Запрос на удаление', MB_YESNO);
+        if (res = IDYES) then DeleteFile (nnm);
+    end;
+    if Nets <> nil then
+    begin
+        t := nets;
+        for i := 1 to Nets_Count do
+        begin
+            f := nil;
+            nnm := String (pr.Cur_Dir) + t^.file_name;
+            try
+                f := TMyStream.Create (nnm, fmOpenRead);
+                f.Free;
+                f := nil;
+                dn := true;
+                except
+                dn := false;
+                f.Free;
+                f := nil;
+            end;
+            if dn then
+            begin
+                res := MessageBox (Form1.Handle, PChar ('Удалить файл нейронной сети (' + t^.file_name + ')?'), 'Запрос на удаление', MB_YESNO);
+                if (res = IDYES) then DeleteFile (nnm);
+            end;
+            Inc (t);
+        end;
+    end;
+    Destroy_Dictonary;
+end;
+function Dict.Save: Boolean;
+var t: ^Pole;
+i, r, cod: Integer;
+//res: Boolean;
+df: TMyStream;
+tt: ^TNet;
+ps: Longint;
+nnm: string;
+begin
+    if (pr.Save_As = 0) and (is_Saved = 1) then
+    begin
+        Save := True;
+        Exit;
+    end;
+    Save := False;
+    df := nil;
+    nnm := String (pr.Cur_Dir) + String (file_name);
+    try
+        df := TMyStream.Create (nnm, fmCreate);
+        cod := 7281;
+        df.Write (cod, sizeof (integer));
+        if (not MySaveStr (df, Rem)) then raise Exception.Create ('Ошибка');
+        df.Write (dt, sizeof (dt));
+        df.Write (sz, sizeof (sz));
+        df.Write (Count, sizeof (Count));
+        
+        t := _fields;
+        for i := 1 to Count do
+        begin
+            if (not t.Save (df)) then raise Exception.Create ('Ошибка');
+            Inc (t);
+        end;
+        ps := df.Position;
+        df.Write (Nets_Count, sizeof (Nets_Count));
+        if Nets <> nil then
+        begin
+            tt := Nets;
+            r := Nets_Count;
+            for i := 1 to Nets_Count do
+            begin
+                if (not tt^.Save) then
+                begin
+                    MessageBox (Form1.Handle, PChar ('Не удалось сохранить файл нейронной сети(' + tt^.file_name + '). Сохранение будет продолжено.'), 'Ошибка сохранения', 0);
+                    Dec (r);
+                end
+                else
+                begin
+                    if (not MySaveStr (df, tt^.file_name)) then raise Exception.Create ('Ошибка');
+                end;
+                Inc (tt);
+            end;
+            if r <> Nets_Count then
+            begin
+                df.Seek (ps, soFromBeginning);
+                df.Write (r, sizeof (r));
+            end;
+        end;
+        df.Free;
+        df := nil;
+        is_Saved := 1;
+        Save := True;
+        except
+        on e: EInOutError do
+        begin
+            try
+                df.Free;
+                except
+            end;
+            DeleteFile (nnm);
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка записи.'), 0);
+            exit;
+        end;
+        on e: Exception do
+        begin
+            try
+                df.Free;
+                except
+            end;
+            DeleteFile (nnm);
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка.'), 0);
+            exit;
+        end;
+    end;
+end;
+function Dict.Load: Boolean;
+var t: ^Pole;
+d, i, cod: Integer;
+//res: Boolean;
+df: TMyStream;
+tt: ^TNet;
+tn: TTreeNode;
+nm, nnm: String;
+
+begin
+    is_Saved := 1;
+    tn := nil;
+    Init;
+    Load := False;
+    nnm := String (pr.Cur_Dir) + String (file_name);
+    try
+        df := nil;
+        df := TMyStream.Create (nnm, fmOpenRead);
+        cod := 0;
+        df.read (cod, sizeof (integer));
+        if cod <> 7281 then raise EInOutError.Create ('Неподдерживаемый формат файла словаря ' + file_name + '.');
+        if (not MyLoadStr (df, @Rem)) then raise Exception.Create ('Ошибка');
+        df.Read (dt, sizeof (dt));
+        df.Read (sz, sizeof (sz));
+        df.Read (Count, sizeof (Count));
+        GetMem (_fields, Count * SizeOf (Pole));
+        FillChar (_fields^, sizeof (Pole) * Count, #0);
+        t := _fields;
+        for i := 1 to Count do
+        begin
+            t^ := Pole.Create;
+            t.voc := d_array.Create;
+            t.name := nil;
+            if (not t.Load (df)) then
+            raise Exception.Create ('Ошибка');
+            Inc (t);
+        end;
+        tn := Form1.Tree1.Items.AddChild (Form1.Tree1.TopItem, Rem + ' ( Создан ' + DateTimeToStr (dt) + ' ,файл: ' + file_name + ' ).');
+        if tn = nil then
+        begin
+            Destroy_Dictonary;
+            try
+                df.Free;
+                except
+            end;
+            MessageBox (Form1.Handle, 'Не могу добавить словарь. Мало памяти.', 'Ошибка', 0);
+            Exit;
+        end;
+        tn.Data := self;
+        Form1.Tree1.Selected := tn;
+        //добавить загрузку связанных сетей
+        df.Read (Nets_Count, sizeof (Nets_Count));
+        if nets_count > 0 then begin
+            GetMem (Nets, Nets_Count * sizeof (TNet));
+            FillChar (Nets^, Nets_Count * sizeof (TNet), #0);
+            tt := Nets;
+            d := 0;
+            i := 1;
+            while (i <= Nets_Count) do
+            begin
+                tt^ := TNet.Create;
+                tt.Init (self);
+                if not MyLoadStr (df, @tt^.file_name) then raise Exception.Create ('Ошибка');
+                nm := tt^.file_name;
+                if (not tt.Load) then
+                begin
+                    MessageBox (Form1.Handle, PChar ('Не удалось загрузить файл нейронной сети(' + nm + '). Загрузка будет продолжена.'), 'Ошибка чтения', 0);
+                    Pr.Set_Saved (0);
+                    is_Saved := 0;
+                    Inc (d);
+                    myStrDispose (tt.file_name);
+                    myStrDispose (tt.Rem);
+                    tt.Free;
+                    Dec (tt);
+                end;
+
+                Inc (tt);
+            end;
+            if d <> 0 then
+            begin
+                Dec (Nets_Count, d);
+                ReallocMem (Nets, Nets_Count * sizeof (TNet));
+            end;
+        end;
+        df.Free;
+        df := nil;
+
+        Load := True;
+        except
+        on e: EInOutError do
+        begin
+            tn.Delete;
+            Destroy_Dictonary;
+            try
+                df.Free;
+                except
+            end;
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка чтения.'), 0);
+        end;
+        on e: EOutOfMemory do
+        begin
+            Destroy_Dictonary;
+            try
+                df.Free;
+                except
+            end;
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка выделения памяти.'), 0);
+        end;
+        on e: Exception do
+        begin
+            try
+                df.Free;
+                except
+            end;
+            Destroy_Dictonary;
+            MessageBox (Form1.Handle, PChar (e.Message), PChar ('Ошибка.'), 0);
+        end;
+    end;
+end;
+
+function Dict.GetField (i: Integer): Pole;stdcall;
+var t: ^Pole;
+begin
+    t := _fields;
+    Inc (t, i);
+    GetField := t^;
+end;
+procedure Dict.AddLibrary;
+type PNet = ^TNet;
+var t: PNet;
+s0, s1: Integer;
+begin
+    try
+        ReallocMem (Nets, (Nets_Count + 1) * sizeof (TNet));
+        except
+        on e: Exception do
+        begin
+            MessageBox (Form1.Handle, PChar (e.Message), 'Ошибка', 0);
+            Exit;
+        end;
+    end;
+    t := Nets;
+    Inc (t, Nets_Count);
+    try
+        t^ := TNet.Create;
+        except
+        ReallocMem (Nets, (Nets_Count) * sizeof (TNet));
+        MessageBox (Form1.Handle, 'Мало памяти. Не могу создать сеть', 'Ошибка', 0);
+        Exit;
+    end;
+    t.Init (self);
+    Inc (Nets_Count);
+    if not t.CreateNet then
+    begin
+        s0 := is_saved;
+        s1 := pr.Saved;
+        KillLibrary (Nets_Count - 1);
+        is_saved := s0;
+        pr.Set_Saved (s1);
+        Exit;
+    end;
+    t.is_saved := 0;
+    is_saved := 0;
+    pr.Set_Saved (0);
+end;
+function Dict.GetLib (i: Integer): TNet;
+var t: ^TNet;
+begin
+    t := nets;
+    Inc (t, i);
+    GetLib := t^;
+end;
+procedure Dict.KillLibrary (i: Integer);
+type PNet = ^TNet;
+var f: TMyStream;
+j: Integer;
+t, t1: PNet;
+res: Boolean;
+nnm: string;
+begin
+    f := nil;
+    if nets = nil then Exit;
+    t := nets;
+    Inc (t, i);
+    res := false;
+    nnm := String (pr.Cur_Dir) + String (t.file_name);
+    try
+        if (t.file_name <> nil) and (t.file_name [0] <> #0) then
+        begin
+            f := TMyStream.Create (nnm, fmOpenRead);
+            f.Free;
+            f := nil;
+            res := true;
+        end;
+        except
+        f.Free;
+        f := nil
+    end;
+    if res then
+    begin
+        j := MessageBox (Form1.Handle, PChar ('Удалить файл нейронной сети (' + t^.file_name + ')?'), 'Запрос на удаление', MB_YESNO);
+        if (j = IDYES) then DeleteFile (nnm);
+    end;
+    is_saved := 0;
+    pr.Set_Saved (0);
+    t^.DestroyNet;
+    t^.Destroy;
+    t1 := t;
+    for j := i to Nets_Count - 1 do
+    begin
+        Inc (t1);
+        t^ := t1^;
+        Inc (t);
+    end;
+    Dec (Nets_Count);
+    ReallocMem (Nets, Nets_Count * sizeof (TNet));
+    if Nets_Count = 0 then Nets := nil;
+end;
+procedure Dict.Show_Dictonary;
+begin
+    try
+        oDict_Param_Form := TDict_Param_Form.Create (Application);
+        oDict_Param_Form.p := self;
+        oDict_Param_Form.ShowModal;
+        except
+        MessageBox (Form1.Handle, 'Не могу создать окно.', 'Ошибка.', 0);
+    end;
+    oDict_Param_Form.Free;
+end;
+
+function Dict.Set_Param: Boolean;
+var v: Integer;
+begin
+    Result := False;
+    try
+        InitD := TInitD.Create (Application);
+        InitD.d := self;
+        v := InitD.ShowModal;
+        Result := v > 0;
+        if v = 1 then
+        begin
+            is_saved := 0;
+            pr.Set_Saved (0);
+        end;
+        except
+        MessageBox (Form1.Handle, 'Не могу создать окно.', 'Ошибка.', 0);
+    end;
+    InitD.Free;
+end;
+
+{
+function Dict.GetUniqueNetName(templ:String):String;
+var i,cn:Integer;
+res,base,ext,pt:	String;
+begin
+  i:=1;
+  pt:='';
+  ext:='';
+  base:=templ;
+  cn:=Pos('.',base);
+  if(cn<>0) then
+  begin
+    pt:='.';
+  	base:=Copy(templ,1,cn-1);
+    ext:=Copy(templ,cn+1,Length(templ)-cn);
+  end;
+
+   while(i>0) do
+   begin
+ 		res:=base+IntToStr(i)+pt+ext;
+        if(pr.IsDictNameUnique(res)) then break;
+        Inc(i);
+   end;
+   Result:=res;
+end;
+     }
+function Dict.IsNetNameUnique (templ: String): Boolean;
+var i: Integer;
+pstr: PChar;
+begin
+    Result := true;
+    for i := 0 to Nets_Count - 1 do
+    begin
+        pstr := GetLib (i).file_name;
+        if (pstr = nil) then continue;
+        if (stricomp (pstr, PChar (templ)) = 0) then
+        begin
+            result := false;
+            Exit;
+        end;
+    end;
+end;
+
+procedure Dict.showInfo (var f: Text);
+begin
+    
+    writeln (f, 'Информация о словаре.');
+    writeln (f, 'Примечание: ', Rem);
+    writeln (f, 'Имя файла: ', file_name);
+    writeln (f, 'Примечание: ', Rem);
+    writeln (f, 'Дата создания: ', DateTimeToStr (dt));
+    writeln (f, 'Число полей: ', Count);
+    writeln (f, 'Число записей на момент создания: ', sz);
+    writeln (f, 'Число сетей: ', Nets_Count);
+    
+end;
+
+initialization
+{_dict:=Dict.Create;
+_dict._fields:=nil;
+_dict.Rem:=nil;
+_dict.file_name:=nil;
+ }
+end.
+
+
